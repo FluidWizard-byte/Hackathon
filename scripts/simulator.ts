@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createAlert } from "@/lib/alerts";
 import { findZoneForPoint, pointInPolygon, type Point, type Polygon, type Zone } from "@/lib/geometry";
 
 const TICK_MS = 1_500;
@@ -11,10 +12,14 @@ interface SimWorker {
   site_id: string;
   x: number;
   y: number;
+  full_name: string;
+  supervisor_id: string | null;
 }
 
 interface SimZone extends Zone {
   site_id: string;
+  name: string;
+  risk_level: "low" | "medium" | "high";
 }
 
 interface SiteBounds {
@@ -28,6 +33,7 @@ const admin = createAdminClient();
 const waypoints = new Map<string, Point>();
 const siteBounds = new Map<string, SiteBounds>();
 let stopping = false;
+const unauthorizedAlertTimes = new Map<string, number>();
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(MAX_COORDINATE, value));
@@ -97,7 +103,7 @@ async function runWatchdog(): Promise<void> {}
 async function tick(): Promise<void> {
   const { data: profiles, error: profileError } = await admin
     .from("profiles")
-    .select("id, org_id, site_id")
+    .select("id, org_id, site_id, full_name, supervisor_id")
     .eq("is_simulated", true)
     .eq("active", true);
   if (profileError) throw profileError;
@@ -106,7 +112,7 @@ async function tick(): Promise<void> {
   const ids = profileRows.map((profile) => profile.id);
   const [positionResult, zoneResult, authResult] = await Promise.all([
     admin.from("worker_positions").select("profile_id, org_id, site_id, x, y").in("profile_id", ids),
-    admin.from("zones").select("id, site_id, polygon"),
+    admin.from("zones").select("id, site_id, name, risk_level, polygon"),
     admin.from("zone_authorizations").select("profile_id, zone_id").in("profile_id", ids),
   ]);
   if (positionResult.error) throw positionResult.error;
@@ -116,7 +122,7 @@ async function tick(): Promise<void> {
   const positionsById = new Map((positionResult.data ?? []).map((position) => [position.profile_id, position]));
   const zones: SimZone[] = (zoneResult.data ?? []).flatMap((row) => {
     const polygon = validPolygon(row.polygon);
-    return polygon ? [{ id: row.id, site_id: row.site_id, polygon }] : [];
+    return polygon ? [{ id: row.id, site_id: row.site_id, name: row.name, risk_level: row.risk_level, polygon }] : [];
   });
   const zonesBySite = new Map<string, SimZone[]>();
   for (const zone of zones) zonesBySite.set(zone.site_id, [...(zonesBySite.get(zone.site_id) ?? []), zone]);
@@ -134,14 +140,14 @@ async function tick(): Promise<void> {
   for (const profile of profileRows) {
     const position = positionsById.get(profile.id);
     if (!position) continue;
-    const worker: SimWorker = { id: profile.id, org_id: profile.org_id, site_id: profile.site_id, x: Number(position.x), y: Number(position.y) };
+    const worker: SimWorker = { id: profile.id, org_id: profile.org_id, site_id: profile.site_id, x: Number(position.x), y: Number(position.y), full_name: profile.full_name, supervisor_id: profile.supervisor_id };
     let target = waypoints.get(worker.id);
     if (!target || Math.hypot(target.x - worker.x, target.y - worker.y) <= STEP_SIZE) {
       target = nextWaypoint(worker, authorizedByProfile.get(worker.id) ?? new Set(), zones);
       waypoints.set(worker.id, target);
     }
     const point = moveToward(worker, target);
-    const zone = findZoneForPoint(point, zonesBySite.get(worker.site_id) ?? []);
+    const zone = findZoneForPoint(point, zonesBySite.get(worker.site_id) ?? []) as SimZone | undefined;
     const { error } = await admin.from("worker_positions").update({
       x: point.x,
       y: point.y,
@@ -152,6 +158,25 @@ async function tick(): Promise<void> {
       on_shift: true,
     }).eq("profile_id", worker.id).eq("org_id", worker.org_id).eq("site_id", worker.site_id);
     if (error) throw error;
+    if (zone && !authorizedByProfile.get(worker.id)?.has(zone.id)) {
+      const throttleKey = `${worker.id}:${zone.id}`;
+      const lastAlertAt = unauthorizedAlertTimes.get(throttleKey) ?? 0;
+      if (Date.now() - lastAlertAt >= 60_000) {
+        await createAlert({
+          type: "unauthorized_zone",
+          severity: zone.risk_level,
+          siteId: worker.site_id,
+          subjectId: worker.id,
+          zoneId: zone.id,
+          message: `${worker.full_name} entered ${zone.name} without authorization`,
+          recipients: [
+            { profileId: worker.id, reason: "subject" },
+            ...(worker.supervisor_id ? [{ profileId: worker.supervisor_id, reason: "supervisor" as const }] : []),
+          ],
+        });
+        unauthorizedAlertTimes.set(throttleKey, Date.now());
+      }
+    }
     movedWorkers += 1;
   }
 

@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AlertTakeover } from "@/components/AlertTakeover";
+import { useMyAlerts } from "@/lib/realtime";
+import { createClient } from "@/lib/supabase/browser";
+
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const MOTION_WINDOW_MS = 5_000;
 const MOTION_VARIANCE_THRESHOLD = 0.25;
@@ -24,6 +28,26 @@ export default function HelmetPage() {
   const [isOnShift, setIsOnShift] = useState(false);
   const [status, setStatus] = useState("Ready to start your shift");
   const [isHoldingSos, setIsHoldingSos] = useState(false);
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [unauthorizedZoneName, setUnauthorizedZoneName] = useState<string | null>(null);
+  const { alerts } = useMyAlerts(profileId ?? "");
+  const unauthorizedAlert = alerts.find((alert) => alert.type === "unauthorized_zone" && alert.status === "open") ?? null;
+
+  useEffect(() => {
+    void createClient().auth.getUser().then(({ data }) => setProfileId(data.user?.id ?? null));
+  }, []);
+
+  useEffect(() => {
+    if (!unauthorizedAlert?.zone_id) {
+      setUnauthorizedZoneName(null);
+      return;
+    }
+    let active = true;
+    void createClient().from("zones").select("name").eq("id", unauthorizedAlert.zone_id).maybeSingle().then(({ data }) => {
+      if (active) setUnauthorizedZoneName(data?.name ?? null);
+    });
+    return () => { active = false; };
+  }, [unauthorizedAlert?.zone_id]);
 
   useEffect(() => {
     const recordMotion = (event: DeviceMotionEvent) => {
@@ -95,8 +119,19 @@ export default function HelmetPage() {
     if (sosTimerRef.current) clearTimeout(sosTimerRef.current);
   }, []);
 
+  const acknowledgeUnauthorizedAlert = async () => {
+    if (!unauthorizedAlert) return;
+    try {
+      const response = await fetch(`/api/alerts/${unauthorizedAlert.id}/ack`, { method: "POST" });
+      if (!response.ok) setStatus("Unable to acknowledge alert");
+    } catch {
+      setStatus("Unable to acknowledge alert");
+    }
+  };
+
   return (
     <main className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-lg flex-col gap-5 bg-slate-950 px-5 py-6 text-white">
+      <AlertTakeover isOpen={unauthorizedAlert !== null} severity="red" title={`You are not authorized for ${unauthorizedZoneName ?? "this zone"} — leave now`} message="Leave the area immediately and notify your supervisor." primaryLabel="Acknowledge" onPrimary={() => void acknowledgeUnauthorizedAlert()} />
       <div><p className="text-sm font-bold uppercase tracking-[0.2em] text-amber-300">SafeSite</p><h1 className="mt-1 text-4xl font-black tracking-tight">Worker safety</h1><p className="mt-3 text-lg text-slate-200" role="status">{status}</p></div>
       {!isOnShift ? <button type="button" onClick={() => void startShift()} className="min-h-28 rounded-2xl bg-green-500 px-6 py-5 text-3xl font-black text-slate-950 shadow-lg shadow-green-500/20 active:bg-green-400">Start shift</button> : <div className="rounded-2xl border-2 border-green-400 bg-green-950/50 px-5 py-6 text-center text-2xl font-black text-green-200">Shift active</div>}
       <button type="button" onPointerDown={startSosHold} onPointerUp={cancelSosHold} onPointerLeave={cancelSosHold} onPointerCancel={cancelSosHold} className="min-h-36 rounded-2xl border-4 border-red-200 bg-red-600 px-6 py-5 text-4xl font-black text-white shadow-lg shadow-red-950/50 active:bg-red-500" aria-label="Hold for two seconds to send an SOS">{isHoldingSos ? "Keep holding SOS…" : "Hold SOS (2 sec)"}</button>

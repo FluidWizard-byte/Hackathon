@@ -40,6 +40,8 @@ export type Alert = {
   created_at: string;
 };
 
+export type MyAlert = Alert & { alert_id: string };
+
 export type LotoTicket = {
   id: string;
   site_id: string;
@@ -149,4 +151,42 @@ export function useSiteRealtime(siteId: string): SiteRealtimeData {
   }, [siteId]);
 
   return data;
+}
+
+/** Loads the current worker's alerts and owns their recipient-scoped realtime subscription. */
+export function useMyAlerts(profileId: string): { alerts: MyAlert[]; loading: boolean; error: string | null } {
+  const [alerts, setAlerts] = useState<MyAlert[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const supabase = createClient();
+    const loadAlerts = async () => {
+      const { data, error: loadError } = await supabase
+        .from("alert_recipients")
+        .select("alert_id, alerts(id, site_id, type, severity, status, zone_id, message, created_at)")
+        .eq("profile_id", profileId);
+      if (!active) return;
+      const rows = (data ?? []).flatMap((row) => {
+        const alert = row.alerts;
+        return alert && typeof alert === "object" && !Array.isArray(alert) ? [{ ...(alert as Alert), alert_id: row.alert_id } as MyAlert] : [];
+      });
+      setAlerts(rows);
+      setLoading(false);
+      setError(loadError?.message ?? null);
+    };
+    void loadAlerts();
+
+    const channel = supabase.channel(`my-alerts:${profileId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "alert_recipients", filter: `profile_id=eq.${profileId}` }, () => { void loadAlerts(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => { void loadAlerts(); })
+      .subscribe();
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [profileId]);
+
+  return { alerts, loading, error };
 }

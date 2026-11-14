@@ -41,7 +41,7 @@ function heartbeatLabel(value: string | null): string {
 }
 
 export function FloorPlan({ siteId, floorplanUrl, zones }: FloorPlanProps) {
-  const { workerPositions, equipment, loading, error } = useSiteRealtime(siteId);
+  const { workerPositions, equipment, alerts, loading, error } = useSiteRealtime(siteId);
   const [selectedWorker, setSelectedWorker] = useState<WorkerPosition | null>(null);
   const selectedZone = zones.find((zone) => zone.id === selectedWorker?.zone_id);
 
@@ -51,14 +51,17 @@ export function FloorPlan({ siteId, floorplanUrl, zones }: FloorPlanProps) {
         <rect width="1000" height="1000" className="fill-slate-900" />
         {floorplanUrl ? <image href={floorplanUrl} x="0" y="0" width="1000" height="1000" preserveAspectRatio="none" opacity="0.7" /> : null}
 
-        {zones.map((zone) => (
+        {zones.map((zone) => {
+          const unauthorized = alerts.some((alert) => alert.type === "unauthorized_zone" && alert.status === "open" && alert.zone_id === zone.id);
+          return (
           <g key={zone.id}>
-            <polygon points={zone.polygon.map(([x, y]) => `${x},${y}`).join(" ")} className={`${riskStyles[zone.risk_level]} stroke-2`} />
+            <polygon points={zone.polygon.map(([x, y]) => `${x},${y}`).join(" ")} className={unauthorized ? "animate-pulse fill-red-600/40 stroke-red-200 stroke-[5px]" : `${riskStyles[zone.risk_level]} stroke-2`} />
             <text x={zone.polygon[0]?.[0] ?? 0} y={(zone.polygon[0]?.[1] ?? 0) - 12} className="fill-slate-100 text-[22px] font-semibold drop-shadow">
               {zone.name}
             </text>
           </g>
-        ))}
+          );
+        })}
 
         {equipment.map((item) => (
           <g key={item.id} transform={`translate(${item.x} ${item.y})`} aria-label={`${item.name}: ${item.status}`}>
