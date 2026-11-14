@@ -29,7 +29,10 @@ export async function createAlert({ recipients, siteId, ...alert }: CreateAlertI
     .select("id, org_id, site_id, type, severity, subject_id, zone_id, equipment_id, ticket_id, message, status, created_at")
     .single();
 
-  if (alertError) throw alertError;
+  if (alertError) {
+    console.error("Failed to create alert", alertError);
+    throw alertError;
+  }
 
   const uniqueRecipients = new Map<string, AlertRecipientReason>();
   for (const recipient of recipients) {
@@ -40,7 +43,10 @@ export async function createAlert({ recipients, siteId, ...alert }: CreateAlertI
     const { error: recipientError } = await admin.from("alert_recipients").insert(
       [...uniqueRecipients].map(([profile_id, reason]) => ({ alert_id: createdAlert.id, profile_id, reason })),
     );
-    if (recipientError) throw recipientError;
+    if (recipientError) {
+      console.error("Failed to create alert recipients", recipientError);
+      throw recipientError;
+    }
   }
 
   return createdAlert;
