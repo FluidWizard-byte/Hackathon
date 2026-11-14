@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 type ZoneEntryResult = { authorized: boolean; zoneName: string };
 
-export default function ZoneScanPage() {
+function ZoneScanContent() {
   const searchParams = useSearchParams();
   const zoneId = searchParams.get("zone");
   const [result, setResult] = useState<ZoneEntryResult | null>(null);
@@ -40,5 +40,13 @@ export default function ZoneScanPage() {
       {!error && !result ? <h1 className="mt-3 text-3xl font-black">Checking zone access…</h1> : null}
       {result ? <><h1 className="mt-3 text-3xl font-black">{result.authorized ? "Zone entry recorded" : "Unauthorized entry recorded"}</h1><p className="mt-4 text-xl text-slate-200">{result.zoneName}</p></> : null}
     </main>
+  );
+}
+
+export default function ZoneScanPage() {
+  return (
+    <Suspense fallback={<main className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-lg flex-col justify-center bg-slate-950 px-5 py-6 text-white"><h1 className="text-3xl font-black">Loading zone scan…</h1></main>}>
+      <ZoneScanContent />
+    </Suspense>
   );
 }
