@@ -188,9 +188,9 @@ async function main(): Promise<void> {
     x: user.position[0],
     y: user.position[1],
     zone_id: zoneIds.get(user.zones[0] ?? (user.site === "plantA" ? "assembly" : "racking"))!,
-    on_shift: user.role === "worker",
-    last_heartbeat_at: user.role === "worker" ? new Date().toISOString() : null,
-    last_motion_at: user.role === "worker" ? new Date().toISOString() : null,
+    on_shift: user.simulated,
+    last_heartbeat_at: user.simulated ? new Date().toISOString() : null,
+    last_motion_at: user.simulated ? new Date().toISOString() : null,
     status: "ok" as const,
     updated_at: new Date().toISOString(),
   }));
