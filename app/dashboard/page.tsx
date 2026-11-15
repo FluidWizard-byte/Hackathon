@@ -1,4 +1,5 @@
-import { FloorPlan, type FloorPlanZone } from "@/components/FloorPlan";
+import { DashboardLive } from "@/components/DashboardLive";
+import type { FloorPlanZone } from "@/components/FloorPlan";
 import { requireRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
@@ -22,9 +23,12 @@ export default async function DashboardPage() {
           </div>
           <span className="flex items-center gap-2 text-sm font-semibold text-emerald-300"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />Live</span>
         </div>
-        <div className="min-h-0 flex-1">
-          <FloorPlan siteId={profile.site_id} floorplanUrl={site?.floorplan_url ?? null} zones={zones} />
-        </div>
+        <DashboardLive
+          siteId={profile.site_id}
+          floorplanUrl={site?.floorplan_url ?? null}
+          role={profile.role}
+          zones={zones}
+        />
       </div>
     </main>
   );

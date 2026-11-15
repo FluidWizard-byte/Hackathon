@@ -1,8 +1,10 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createAlert } from "@/lib/alerts";
+import { runNoHeartbeatWatchdog } from "@/lib/escalation-service";
 import { findZoneForPoint, pointInPolygon, type Point, type Polygon, type Zone } from "@/lib/geometry";
 
 const TICK_MS = 1_500;
+const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_COORDINATE = 1_000;
 const STEP_SIZE = 35;
 
@@ -33,6 +35,7 @@ const admin = createAdminClient();
 const waypoints = new Map<string, Point>();
 const siteBounds = new Map<string, SiteBounds>();
 let stopping = false;
+let lastWatchdogRunAt = 0;
 const unauthorizedAlertTimes = new Map<string, number>();
 
 function clamp(value: number): number {
@@ -97,8 +100,12 @@ function moveToward(current: Point, target: Point): Point {
   return { x: clamp(current.x + (dx / distance) * STEP_SIZE), y: clamp(current.y + (dy / distance) * STEP_SIZE) };
 }
 
-// Filled in task 11 when the escalation/watchdog behavior is implemented.
-async function runWatchdog(): Promise<void> {}
+export async function runWatchdog(): Promise<void> {
+  if (Date.now() - lastWatchdogRunAt < WATCHDOG_INTERVAL_MS) return;
+  lastWatchdogRunAt = Date.now();
+  const escalated = await runNoHeartbeatWatchdog();
+  if (escalated > 0) console.log(`[sim] Watchdog escalated ${escalated} worker${escalated === 1 ? "" : "s"}`);
+}
 
 async function tick(): Promise<void> {
   const { data: profiles, error: profileError } = await admin
@@ -111,7 +118,7 @@ async function tick(): Promise<void> {
   const profileRows = profiles ?? [];
   const ids = profileRows.map((profile) => profile.id);
   const [positionResult, zoneResult, authResult] = await Promise.all([
-    admin.from("worker_positions").select("profile_id, org_id, site_id, x, y").in("profile_id", ids),
+    admin.from("worker_positions").select("profile_id, org_id, site_id, x, y, zone_id").in("profile_id", ids),
     admin.from("zones").select("id, site_id, name, risk_level, polygon"),
     admin.from("zone_authorizations").select("profile_id, zone_id").in("profile_id", ids),
   ]);
@@ -158,6 +165,19 @@ async function tick(): Promise<void> {
       on_shift: true,
     }).eq("profile_id", worker.id).eq("org_id", worker.org_id).eq("site_id", worker.site_id);
     if (error) throw error;
+    if (position.zone_id !== (zone?.id ?? null)) {
+      let resolveQuery = admin
+        .from("alerts")
+        .update({ status: "resolved", resolved_at: now })
+        .eq("org_id", worker.org_id)
+        .eq("site_id", worker.site_id)
+        .eq("subject_id", worker.id)
+        .eq("type", "unauthorized_zone")
+        .eq("status", "open");
+      if (zone) resolveQuery = resolveQuery.neq("zone_id", zone.id);
+      const { error: resolveError } = await resolveQuery;
+      if (resolveError) throw resolveError;
+    }
     if (zone && !authorizedByProfile.get(worker.id)?.has(zone.id)) {
       const throttleKey = `${worker.id}:${zone.id}`;
       const lastAlertAt = unauthorizedAlertTimes.get(throttleKey) ?? 0;

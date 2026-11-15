@@ -19,13 +19,34 @@ type CreateAlertInput = {
 };
 
 /** Creates an alert and its distinct recipients using the server-only admin client. */
-export async function createAlert({ recipients, siteId, ...alert }: CreateAlertInput) {
+export async function createAlert({
+  recipients,
+  siteId,
+  type,
+  severity,
+  subjectId,
+  zoneId,
+  equipmentId,
+  ticketId,
+  message,
+}: CreateAlertInput) {
   const admin = createAdminClient();
   const { data: site, error: siteError } = await admin.from("sites").select("org_id").eq("id", siteId).single();
   if (siteError || !site) throw siteError ?? new Error("Alert site not found");
   const { data: createdAlert, error: alertError } = await admin
     .from("alerts")
-    .insert({ org_id: site.org_id, site_id: siteId, ...alert })
+    .insert({
+      org_id: site.org_id,
+      site_id: siteId,
+      type,
+      severity,
+      subject_id: subjectId,
+      zone_id: zoneId,
+      equipment_id: equipmentId,
+      ticket_id: ticketId,
+      message,
+      status: "open",
+    })
     .select("id, org_id, site_id, type, severity, subject_id, zone_id, equipment_id, ticket_id, message, status, created_at")
     .single();
 

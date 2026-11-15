@@ -65,6 +65,17 @@ export async function POST(request: Request) {
     ]);
     if (positionResult.error || eventResult.error) return NextResponse.json({ error: "Unable to record zone entry" }, { status: 500 });
 
+    const { error: resolveError } = await admin
+      .from("alerts")
+      .update({ status: "resolved", resolved_at: now })
+      .eq("org_id", profile.org_id)
+      .eq("site_id", profile.site_id)
+      .eq("subject_id", profile.id)
+      .eq("type", "unauthorized_zone")
+      .eq("status", "open")
+      .neq("zone_id", zone.id);
+    if (resolveError) throw resolveError;
+
     let alertId: string | null = null;
     if (!authorized) {
       const alert = await createAlert({
